@@ -1,0 +1,28 @@
+{
+  "name": "fintech-ledger-engine",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build": "tsc",
+    "start": "tsc && node dist/index.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.4",
+    "@types/pg": "^8.20.0",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.9"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "pg": "^8.21.0",
+    "zod": "^4.4.3"
+  }
+}
