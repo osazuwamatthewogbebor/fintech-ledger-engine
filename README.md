@@ -182,31 +182,10 @@ Append this section directly to the bottom of your `README.md` file:
 
 ### Osazuwa Matthew Ogbebor — Backend & Systems Engineer
 
-<!-- [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://linkedin.com/in/your-username) -->
-<!-- [![Upwork](https://img.shields.io/badge/Upwork-14A800?style=for-the-badge&logo=upwork&logoColor=white)](https://www.upwork.com/freelancers/~your-profile-id) -->
-[![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://hub.docker.com/r/your-dockerhub-username/fintech-ledger-engine)
-
-A First-Class Honors Engineering graduate and specialized backend architect focused on designing high-throughput, secure financial infrastructure and low-latency microservices.
-
-* **Core Competencies:** Distributed Systems Architecture, Double-Entry Financial Ledgers, Concurrency Control (Go/Node.js/Python), and Advanced Database Query Optimization.
-* **Professional Philosophy:** Designing modular, deterministic codebases that prioritize strict separation of concerns, defensive domain invariants, and mathematical precision over temporary convenience.
-* **Location Profile:** Open to high-impact technical roles globally, bringing deep experience in peer-led software fellowships, complex parallel kinematics simulation design, and enterprise-grade multi-tenant backend architecture.
-
----
-
-### Technical Portfolio Ecosystem
-This ledger engine serves as a key architectural component within a broader portfolio revamp project. It highlights production-ready implementations of complex web security layers, robust data validation boundaries, and highly resilient database connection lifecycles designed to survive extreme concurrent workloads without performance degradation.
-
-* **[GitHub](https://github.com/osazuwamatthewogbebor)**
-
-## Author & Technical Attribution
-
-### Osazuwa Matthew Ogbebor — Backend & Systems Engineer
-
 [![GitHub](https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/osazuwamatthewogbebor/fintech-ledger-engine)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://linkedin.com/in/your-username)
-[![Upwork](https://img.shields.io/badge/Upwork-14A800?style=for-the-badge&logo=upwork&logoColor=white)](https://www.upwork.com/freelancers/~your-profile-id)
-[![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://hub.docker.com/r/your-dockerhub-username/fintech-ledger-engine)
+<!-- [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://linkedin.com/in/your-username)
+[![Upwork](https://img.shields.io/badge/Upwork-14A800?style=for-the-badge&logo=upwork&logoColor=white)](https://www.upwork.com/freelancers/~your-profile-id) -->
+[![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://hub.docker.com/repository/docker/osasmatthew/fintech-ledger-engine/)
 
 A First-Class Honors Engineering graduate and specialized backend architect focused on designing high-throughput, secure financial infrastructure and low-latency microservices.
 
