@@ -1,7 +1,7 @@
 # Double-Entry Ledger Engine
 
 A ledger service for moving money between accounts. Balances aren't stored
-as a column that gets updated — they're derived by summing an append-only
+as a column that gets updated' they're derived by summing an append-only
 list of ledger entries, so the history is the source of truth and nothing
 can change a balance without leaving a record.
 
@@ -37,7 +37,7 @@ other instead of deadlocking.
 
 **3. The balance is checked while the lock is held (state layer).** With the
 rows locked, the engine sums the account's entries and checks the result.
-Normal accounts can't go negative — if they would, the whole transaction
+Normal accounts can't go negative' if they would, the whole transaction
 rolls back. Accounts configured as clearing accounts are allowed to.
 
 Doing the balance check *inside* the lock is what makes it meaningful. Check
@@ -55,7 +55,7 @@ Zod validation of the request body
    ▼
 TransferFunds use case
    │
-   ├──► Transaction aggregate — check Σ debits === Σ credits
+   ├──► Transaction aggregate' check Σ debits === Σ credits
    │
    └──► Postgres ledger repository
             │
@@ -103,7 +103,7 @@ twice if a client retries.
 
 ### Deriving balances instead of caching them
 
-A `balance` column on `accounts` would be faster — one row update instead of
+A `balance` column on `accounts` would be faster' one row update instead of
 an aggregate over history. I went with derivation because a cached balance
 can silently drift from the entries that are supposed to produce it, and
 once it has, you can't tell which one is wrong.
@@ -112,14 +112,14 @@ The cost is real and I'm not going to pretend otherwise: every balance check
 scans that account's entries, and that gets slower as history grows. The
 usual fix is periodic balance snapshots, so a read only sums entries since
 the last snapshot rather than since the beginning. **I haven't built that
-here** — at the volumes this has actually been tested at it doesn't matter,
+here**' at the volumes this has actually been tested at it doesn't matter,
 but it would matter in production.
 
 ### Pessimistic locking instead of optimistic
 
 Optimistic locking (a version column, retry on conflict) avoids holding
 locks, and does better when contention is rare. Under contention it gets
-worse — conflicting transactions burn work, fail, and retry.
+worse' conflicting transactions burn work, fail, and retry.
 
 A ledger's hot accounts are a contended case by nature: a merchant account
 or a clearing account has many transfers hitting it at once. So I took locks
@@ -128,13 +128,13 @@ slow transaction holds up everything else touching the same rows.
 
 ### Integer minor units instead of decimals
 
-Money is stored as integers in the currency's smallest unit — ₦1,500.50 is
+Money is stored as integers in the currency's smallest unit' ₦1,500.50 is
 stored as `150050`, in a `NUMERIC(20,0)` column and handled as `BigInt` in
 the domain. Floating point can't represent base-10 fractions exactly
 (`0.1 + 0.2` is `0.30000000000000004`), and in a ledger those errors
 accumulate into real discrepancies.
 
-The cost is that conversion has to happen at the edges — the API accepts and
+The cost is that conversion has to happen at the edges' the API accepts and
 returns major units, and the boundary between the two is a place bugs can
 hide. It needs to be one clearly-marked conversion in one place, not
 scattered.
@@ -191,13 +191,13 @@ The balance check rejects it:
 
 - **No balance snapshots**, so balance reads scan full entry history per
   account. This is the first thing that would need fixing at volume.
-- **No currency validation on transfer** — nothing currently stops a
+- **No currency validation on transfer**' nothing currently stops a
   transfer between accounts denominated in different currencies.
 - **Multi-tenancy is enforced in application code**, not by row-level
   security or a database constraint. A query that forgets the `tenant_id`
   filter would cross the boundary.
 - **No reversal or correction flow.** Since entries are immutable, fixing a
-  mistake should mean writing a compensating transaction — that isn't
+  mistake should mean writing a compensating transaction' that isn't
   implemented.
 - **No pagination** on account history.
 - Clearing accounts can go negative without limit; there's no configured
@@ -209,7 +209,7 @@ TypeScript · PostgreSQL · Zod · Vitest · Docker Compose
 
 ## Author
 
-Osazuwa Matthew Ogbebor — [@osazuwamatthewogbebor](https://github.com/osazuwamatthewogbebor)
+Osazuwa Matthew Ogbebor' [@osazuwamatthewogbebor](https://github.com/osazuwamatthewogbebor)
 
 Backend engineer, mostly working on APIs, databases, and systems
 programming in Go and TypeScript.
