@@ -1,47 +1,70 @@
 # Double-Entry Ledger Engine
 
-A high-performance, distributed-systems-optimized immutable ledger engine engineered with strict financial invariants, deterministic deadlock mitigation, and explicit multi-tenant isolation boundaries. Designed for transaction-critical core banking, fintech platforms, and multi-currency clearing architectures.
+A ledger service for moving money between accounts. Balances aren't stored
+as a column that gets updated — they're derived by summing an append-only
+list of ledger entries, so the history is the source of truth and nothing
+can change a balance without leaving a record.
 
----
+TypeScript, PostgreSQL, Zod, Vitest, Docker.
 
-## Architectural Design & Core Philosophy
+## The core idea
 
-This ledger engine enforces the absolute physical preservation of capital across distributed networks. Rather than storing mutable balance states in database columns, balance state is derived directly from an append-only transaction stream of balanced ledger entries.
+Every transfer writes at least two ledger entries: a debit on one account
+and a credit on another, always summing to zero. Entries are never updated
+or deleted. An account's balance is whatever its entries add up to.
 
-### The Triple-Lock Invariant Framework
+This is the standard double-entry model, and the reason to use it here is
+that a wrong balance becomes impossible to hide. If a balance is a mutable
+column, a bug or a race or someone running a manual `UPDATE` can put it out
+of sync with reality and there's no trail. If the balance is derived, the
+only way to change it is to write an entry, and the entry stays there.
 
-The engine guarantees system integrity by evaluating financial constraints at three distinct architectural boundaries:
+## Where correctness is enforced
 
-1. **The Inbound Symmetry Guard (Application Layer):** Prior to database interaction, the domain aggregate validates that the absolute sum of credits matches the absolute sum of debits down to the lowest minor unit ($\sum \text{Debits} = \sum \text{Credits}$). Balanced entry symmetry must be met, or the transaction is rejected immediately.
-2. **Pessimistic Concurrency Row Locking (Database Layer):** To prevent race conditions during high-concurrency wallet updates, the engine acquires explicit database row-level locks (`SELECT ... FOR UPDATE`) in a deterministic, sorted order.
-3. **The Post-Lock Liquidity Evaluator (State Layer):** While holding the exclusive row lock, the engine calculates the real-time balance aggregate. It applies conditional liquidity rules, instantly rolling back the database transaction if a standard consumer account enters a negative balance, while permitting configured clearing nodes to carry short-term negative balances.
+Three checks, at three different points:
 
----
+**1. The transfer must balance (application layer).** Before touching the
+database, the transaction object checks that debits and credits sum to the
+same amount in minor units. Unbalanced transfers are rejected outright.
 
-## System Architecture & Data Topology
+**2. Rows are locked in a fixed order (database layer).** The engine takes
+`SELECT ... FOR UPDATE` locks on the accounts involved, sorted by account
+ID before locking. The sorting is the point: if two concurrent transfers
+touch the same pair of accounts in opposite directions, and each grabs one
+lock then waits for the other, they deadlock. Sorting the IDs means every
+transaction acquires locks in the same order, so one simply waits for the
+other instead of deadlocking.
+
+**3. The balance is checked while the lock is held (state layer).** With the
+rows locked, the engine sums the account's entries and checks the result.
+Normal accounts can't go negative — if they would, the whole transaction
+rolls back. Accounts configured as clearing accounts are allowed to.
+
+Doing the balance check *inside* the lock is what makes it meaningful. Check
+it before locking and another transaction can spend the same funds in the
+gap.
+
+## Flow
 
 ```
-                  [ API Boundary / REST Controllers ]
-                                  │
-                                  ▼
-                     [ Zod Input Validation DTOs ]
-                                  │
-                                  ▼
-                   [ Transfer Funds Use Case / App ]
-                                  │
-          ┌───────────────────────┴───────────────────────┐
-          ▼                                               ▼
-[ Transaction Aggregate ]                       [ Postgres Ledger Repository ]
-  Validate Symmetry Guard Matrix                  Acquire Deterministic Locks
-  (Σ Debits === Σ Credits)                        Execute Invariant Rules
-                                                          │
-                                                          ▼
-                                                [ Raw PostgreSQL Cluster ]
-                                                  Atomic COMMIT / ROLLBACK
-
+REST controller
+   │
+   ▼
+Zod validation of the request body
+   │
+   ▼
+TransferFunds use case
+   │
+   ├──► Transaction aggregate — check Σ debits === Σ credits
+   │
+   └──► Postgres ledger repository
+            │
+            ├─ sort account IDs, SELECT ... FOR UPDATE
+            ├─ sum entries, apply balance rules
+            └─ COMMIT or ROLLBACK
 ```
 
-### Core Schema Design
+## Schema
 
 ```sql
 CREATE TABLE accounts (
@@ -71,81 +94,75 @@ CREATE TABLE ledger_entries (
 
 CREATE INDEX idx_ledger_entries_account_id ON ledger_entries(account_id);
 CREATE INDEX idx_accounts_tenant_id ON accounts(tenant_id);
-
 ```
 
----
+`reference` is unique, which is what stops the same transfer being recorded
+twice if a client retries.
 
-## Deep Architectural Tradeoffs & Engineering Decisions
+## Decisions, and what they cost
 
-### 1. Balance Derivation: Real-Time Aggregate Calculation vs. Cached State Columns
+### Deriving balances instead of caching them
 
-* **Approach A (Cached Balance Column):** Keeping a `balance` field directly inside the `accounts` table and updating it via `UPDATE accounts SET balance = balance + X`.
-* **Approach B (Derived Stream - Selected):** Dynamically calculating the sum of the history stream via `SUM(CASE WHEN direction = 'DEBIT' THEN amount ELSE -amount END)` while isolated inside a pessimistic lock.
+A `balance` column on `accounts` would be faster — one row update instead of
+an aggregate over history. I went with derivation because a cached balance
+can silently drift from the entries that are supposed to produce it, and
+once it has, you can't tell which one is wrong.
 
-#### Engineering Tradeoffs:
+The cost is real and I'm not going to pretend otherwise: every balance check
+scans that account's entries, and that gets slower as history grows. The
+usual fix is periodic balance snapshots, so a read only sums entries since
+the last snapshot rather than since the beginning. **I haven't built that
+here** — at the volumes this has actually been tested at it doesn't matter,
+but it would matter in production.
 
-* **Write Performance:** Approach A offers faster raw execution speeds under low concurrency because it mutates a single record rather than performing an aggregation scan over a history table. However, Approach B provides absolute structural truth. A cached column can become out of sync due to software bugs, race conditions, or manual database changes, leading to untraceable data state corruption.
-* **Auditability & Compliance:** Approach B guarantees complete audit capability. Because the balance is a direct mathematical result of historical entries, it is impossible for an account balance to change without leaving a permanent journal trail.
-* **Mitigation of Scan Overhead:** To avoid performance drops as transaction volume grows, the system is designed to allow read-side optimizations like automated nightly snapshot blocks or materialized balance views without compromising the strict append-only nature of the ledger write-path.
+### Pessimistic locking instead of optimistic
 
-### 2. Concurrency Control: Pessimistic Row Locking vs. Optimistic Version Checks
+Optimistic locking (a version column, retry on conflict) avoids holding
+locks, and does better when contention is rare. Under contention it gets
+worse — conflicting transactions burn work, fail, and retry.
 
-* **Approach A (Optimistic Locking):** Using a version sequence counter (`WHERE version = current_version`). If a collision occurs, the system catches the error and retries the application logic.
-* **Approach B (Pessimistic Deterministic Locking - Selected):** Using `SELECT ... FOR UPDATE` directly on target account IDs arranged in alphabetical order before writing journal lines.
+A ledger's hot accounts are a contended case by nature: a merchant account
+or a clearing account has many transfers hitting it at once. So I took locks
+directly. The cost is that transactions serialize on those accounts, and a
+slow transaction holds up everything else touching the same rows.
 
-#### Engineering Tradeoffs:
+### Integer minor units instead of decimals
 
-* **Contention Management:** Optimistic locking works well in low-contention environments but degrades quickly under heavy transaction traffic (e.g., flash sales, payroll distribution, or popular payment gateways). High collision rates cause excessive request retries, which spikes CPU usage and increases API latency.
-* **Deadlock Elimination:** Mixing row-level locks without strict rules can cause cyclic deadlock conditions where Transaction 1 locks Account A and waits for Account B, while Transaction 2 locks Account B and waits for Account A. The engine eliminates this vulnerability by extracting unique account IDs from the payload and sorting them alphabetically before executing the SQL block. This guarantees all parallel operations acquire locks in the exact same physical order, shifting lock waits into a predictable sequential queue.
+Money is stored as integers in the currency's smallest unit — ₦1,500.50 is
+stored as `150050`, in a `NUMERIC(20,0)` column and handled as `BigInt` in
+the domain. Floating point can't represent base-10 fractions exactly
+(`0.1 + 0.2` is `0.30000000000000004`), and in a ledger those errors
+accumulate into real discrepancies.
 
-### 3. Precision Management: Minor Units (BigInt Strings) vs. IEEE 754 Floating Points
+The cost is that conversion has to happen at the edges — the API accepts and
+returns major units, and the boundary between the two is a place bugs can
+hide. It needs to be one clearly-marked conversion in one place, not
+scattered.
 
-* **Approach A (Floating Point/Numeric Decimals):** Storing values as standard JavaScript `number` primitives or database `float` data types (e.g., `10.50`).
-* **Approach B (Minor Units Pattern - Selected):** Scaling all monetary entries to integer strings representing their absolute minor unit value (e.g., saving `1,500.50 NGN` or `USD` as `150050` minor units).
-
-#### Engineering Tradeoffs:
-
-* **Mathematical Reliability:** Floating-point binary representations cannot accurately represent base-10 fractional numbers (e.g., `0.1 + 0.2` evaluates to `0.30000000000000004`). In high-volume financial contexts, these rounding micro-errors aggregate into significant capital leaks.
-* **Storage and Mapping:** Using `BigInt` mappings at the domain level paired with `numeric(20,0)` string casting on the database wire ensures zero precision loss. This guarantees mathematical exactness across arbitrary scales while shifting currency-specific decimal positioning entirely to peripheral display layers.
-
----
-
-## Local Verification & Development
-
-### Infrastructure Initialization
-
-The engine requires Docker Compose to orchestrate its persistent runtime storage environment. Spin up the dedicated PostgreSQL cluster using the following command:
+## Running it
 
 ```bash
 docker compose up -d
-
-```
-
-### Test Suite Execution
-
-Domain models, atomic transaction rollbacks, and concurrent deadlock elimination matrices are fully verified via Vitest. Run the automated test suite with:
-
-```bash
 npm run test
-
 ```
 
-### Production Live Integration Check
+Tests cover the domain models, rollback on failed transactions, and
+concurrent transfers against the same accounts.
 
-To execute real-time validation against the live application port (`5000`), populate the database container with valid RFC 4122 compliant version 4 UUID entries:
+### Trying a transfer
+
+Seed two accounts:
 
 ```bash
 docker compose exec -T ledger_postgres psql -U ledger_admin -d fintech_ledger_db -c "
-INSERT INTO accounts (id, tenant_id, user_id, currency, type) VALUES 
-('7c9e6b1a-5d3c-4a2f-9b1e-8d7c6b5a4d3c', '4a7f34c2-901d-4b88-8fad-c2a4901df4b8', 'live_sender_user', 'NGN', 'ASSET'),
-('3f2a1b0c-4d5e-4f6a-8b9c-0d1e2f3a4b5c', '4a7f34c2-901d-4b88-8fad-c2a4901df4b8', 'live_receiver_user', 'NGN', 'ASSET')
+INSERT INTO accounts (id, tenant_id, user_id, currency, type) VALUES
+('7c9e6b1a-5d3c-4a2f-9b1e-8d7c6b5a4d3c', '4a7f34c2-901d-4b88-8fad-c2a4901df4b8', 'sender', 'NGN', 'ASSET'),
+('3f2a1b0c-4d5e-4f6a-8b9c-0d1e2f3a4b5c', '4a7f34c2-901d-4b88-8fad-c2a4901df4b8', 'receiver', 'NGN', 'ASSET')
 ON CONFLICT (id) DO NOTHING;
 "
-
 ```
 
-Verify the liquidity validation engine by attempting an unauthorized overdraft transfer via `curl`:
+Then attempt a transfer from an account with no funds:
 
 ```bash
 curl -X POST http://localhost:5000/api/v1/ledger/transfer \
@@ -156,44 +173,47 @@ curl -X POST http://localhost:5000/api/v1/ledger/transfer \
     "receiverAccountId": "3f2a1b0c-4d5e-4f6a-8b9c-0d1e2f3a4b5c",
     "amount": 1500.50,
     "currency": "NGN",
-    "reference": "TX-REF-LIVE-001",
-    "description": "Peer to Peer Wallet Transfer"
+    "reference": "TX-REF-001",
+    "description": "Test transfer"
   }'
-
 ```
 
-The system will intercept the request and securely return a domain validation rejection payload:
+The balance check rejects it:
 
 ```json
 {
   "success": false,
   "error": "Transaction Denied: Insufficient capital. Available: NGN 0"
 }
-
 ```
 
-Here is the updated **Author & Technical Attribution** section, now featuring clean, professional Markdown badges styled for high-visibility technical portfolios.
+## Known gaps
 
-Append this section directly to the bottom of your `README.md` file:
+- **No balance snapshots**, so balance reads scan full entry history per
+  account. This is the first thing that would need fixing at volume.
+- **No currency validation on transfer** — nothing currently stops a
+  transfer between accounts denominated in different currencies.
+- **Multi-tenancy is enforced in application code**, not by row-level
+  security or a database constraint. A query that forgets the `tenant_id`
+  filter would cross the boundary.
+- **No reversal or correction flow.** Since entries are immutable, fixing a
+  mistake should mean writing a compensating transaction — that isn't
+  implemented.
+- **No pagination** on account history.
+- Clearing accounts can go negative without limit; there's no configured
+  floor.
 
----
+## Stack
 
-## Author & Technical Attribution
+TypeScript · PostgreSQL · Zod · Vitest · Docker Compose
 
-### Osazuwa Matthew Ogbebor — Backend & Systems Engineer
+## Author
 
-[![GitHub](https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white)](https://github.com/osazuwamatthewogbebor/fintech-ledger-engine)
-<!-- [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://linkedin.com/in/your-username)
-[![Upwork](https://img.shields.io/badge/Upwork-14A800?style=for-the-badge&logo=upwork&logoColor=white)](https://www.upwork.com/freelancers/~your-profile-id) -->
-[![Docker](https://img.shields.io/badge/Docker-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://hub.docker.com/repository/docker/osasmatthew/fintech-ledger-engine/)
+Osazuwa Matthew Ogbebor — [@osazuwamatthewogbebor](https://github.com/osazuwamatthewogbebor)
 
-A First-Class Honors Engineering graduate and specialized backend architect focused on designing high-throughput, secure financial infrastructure and low-latency microservices.
+Backend engineer, mostly working on APIs, databases, and systems
+programming in Go and TypeScript.
 
-* **Core Competencies:** Distributed Systems Architecture, Double-Entry Financial Ledgers, Concurrency Control (Go/Node.js/Python), and Advanced Database Query Optimization.
-* **Professional Philosophy:** Designing modular, deterministic codebases that prioritize strict separation of concerns, defensive domain invariants, and mathematical precision over temporary convenience.
-* **Location Profile:** Open to high-impact technical roles globally, bringing deep experience in peer-led software fellowships, complex parallel kinematics simulation design, and enterprise-grade multi-tenant backend architecture.
+## License
 
----
-
-### Technical Portfolio Ecosystem
-This ledger engine serves as a key architectural component within a broader portfolio revamp project. It highlights production-ready implementations of complex web security layers, robust data validation boundaries, and highly resilient database connection lifecycles designed to survive extreme concurrent workloads without performance degradation.
+MIT
